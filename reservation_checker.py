@@ -1,21 +1,21 @@
 import streamlit as st
 from datetime import datetime, timedelta
 
-# 기본 설정
+# 시간 설정
 WORK_START = datetime.strptime("08:00", "%H:%M")
 WORK_END = datetime.strptime("23:00", "%H:%M")
+DAYTIME_START = datetime.strptime("09:00", "%H:%M")
+DAYTIME_END = datetime.strptime("18:00", "%H:%M")
 LUNCH_START = datetime.strptime("12:00", "%H:%M")
 LUNCH_END = datetime.strptime("13:00", "%H:%M")
 
-# 제목 및 입력창
+# Streamlit UI
 st.title("🔍 분석실 남는자리 찾기 피로그램")
 st.write("날짜 + '해당날짜 예약하기' + 시간 형식의 텍스트를 입력해주세요.")
 text_input = st.text_area("텍스트 입력", height=400)
+mode_daytime_only = st.toggle("주간시간만 보기", value=False)
 
-# 스위치: 업무시간 모드
-mode_daytime_only = st.toggle("09:00~18:00만 보기 (업무시간 모드)", value=False)
-
-# 파서: 날짜별 예약 시간 추출
+# 텍스트 파싱 함수
 def parse_reservations(text):
     lines = text.strip().splitlines()
     data = {}
@@ -24,7 +24,7 @@ def parse_reservations(text):
         line = line.strip()
         if not line:
             continue
-        if line.isdigit():
+        if line.replace(".", "").isdigit():
             current_date = line
             data[current_date] = []
         elif "~" in line and current_date:
@@ -33,7 +33,7 @@ def parse_reservations(text):
             data[current_date].append((start, end))
     return data
 
-# 빈 시간 계산 함수 (점심시간 제외 반영)
+# 빈 시간 계산 함수
 def find_free_slots(bookings, start_time, end_time):
     free_slots = []
     current = start_time
@@ -65,7 +65,7 @@ def find_free_slots(bookings, start_time, end_time):
 
     return [(s.strftime("%H:%M"), e.strftime("%H:%M")) for s, e in free_slots if e > s]
 
-# 분석 버튼 클릭
+# 분석 실행
 if st.button("분석 시작"):
     if not text_input.strip():
         st.warning("텍스트를 입력해주세요.")
@@ -73,9 +73,9 @@ if st.button("분석 시작"):
         parsed = parse_reservations(text_input)
         result = []
 
-        # 시간 범위 설정: 업무시간 or 전체시간
-        start_scope = datetime.strptime("09:00", "%H:%M") if mode_daytime_only else WORK_START
-        end_scope = datetime.strptime("18:00", "%H:%M") if mode_daytime_only else WORK_END
+        # 모드에 따라 시간 범위 설정
+        start_scope = DAYTIME_START if mode_daytime_only else WORK_START
+        end_scope = DAYTIME_END if mode_daytime_only else WORK_END
 
         for date, bookings in parsed.items():
             if bookings:
@@ -85,6 +85,4 @@ if st.button("분석 시작"):
 
         if result:
             st.success("분석 완료! 아래 표를 확인하세요.")
-            st.dataframe(result)
-        else:
-            st.info("예약이 없는 날짜이거나, 빈 시간이 존재하지 않습니다.")
+
