@@ -1,88 +1,96 @@
 import streamlit as st
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
+import re
 
-# 시간 설정
-WORK_START = datetime.strptime("08:00", "%H:%M")
-WORK_END = datetime.strptime("23:00", "%H:%M")
-DAYTIME_START = datetime.strptime("09:00", "%H:%M")
-DAYTIME_END = datetime.strptime("18:00", "%H:%M")
-LUNCH_START = datetime.strptime("12:00", "%H:%M")
-LUNCH_END = datetime.strptime("13:00", "%H:%M")
+st.title("예약 가능 시간 확인기")
 
-# Streamlit UI
-st.title("🔍 분석실 남는자리 찾기 피로그램")
-st.write("날짜 + '해당날짜 예약하기' + 시간 형식의 텍스트를 입력해주세요.")
-text_input = st.text_area("텍스트 입력", height=400)
-mode_daytime_only = st.toggle("주간시간만 보기", value=False)
+uploaded_text = st.text_area("예약 텍스트를 붙여넣으세요:", height=400)
+weekday_only = st.toggle("주간 사용시간만 포함 (09:00~18:00)", value=True)
 
-# 텍스트 파싱 함수
-def parse_reservations(text):
-    lines = text.strip().splitlines()
-    data = {}
+FULL_TIME_RANGE = (dtime(8, 0), dtime(23, 0))
+WEEKDAY_TIME_RANGE = (dtime(9, 0), dtime(18, 0))
+LUNCH_TIME = (dtime(12, 0), dtime(13, 0))
+
+# 타임슬롯 30분 단위로 생성
+def generate_slots(start, end):
+    slots = []
+    current = datetime.combine(datetime.today(), start)
+    end_time = datetime.combine(datetime.today(), end)
+    while current < end_time:
+        slot_end = current + timedelta(minutes=30)
+        slots.append((current.time(), slot_end.time()))
+        current = slot_end
+    return slots
+
+# 예약 문자열을 time 객체로 변환
+def parse_time_range(text):
+    match = re.match(r"(\d{2}):(\d{2})~(\d{2}):(\d{2})", text)
+    if not match:
+        return None
+    h1, m1, h2, m2 = map(int, match.groups())
+    return dtime(h1, m1), dtime(h2, m2)
+
+# 날짜 문자열을 datetime 객체로 변환
+
+def parse_date(text):
+    text = text.strip()
+    # "12.10" 같은 형식 처리
+    try:
+        month, day = map(int, text.split("."))
+        year = datetime.today().year
+        return datetime(year, month, day)
+    except:
+        return None
+
+if uploaded_text:
+    lines = uploaded_text.splitlines()
+    schedule = {}
     current_date = None
+
     for line in lines:
-        line = line.strip()
-        if not line:
+        if line.strip() == "" or "예약하기" in line:
             continue
-        if line.replace(".", "").isdigit():
-            current_date = line
-            data[current_date] = []
-        elif "~" in line and current_date:
-            time_range = line.split()[0]
-            start, end = time_range.split("~")
-            data[current_date].append((start, end))
-    return data
+        parsed = parse_date(line)
+        if parsed:
+            current_date = parsed
+            schedule[current_date] = []
+        elif current_date and re.match(r"\d{2}:\d{2}~\d{2}:\d{2}", line):
+            time_range = parse_time_range(line.strip())
+            if time_range:
+                schedule[current_date].append(time_range)
 
-# 빈 시간 계산 함수
-def find_free_slots(bookings, start_time, end_time):
-    free_slots = []
-    current = start_time
-    sorted_bookings = sorted([(datetime.strptime(s, "%H:%M"), datetime.strptime(e, "%H:%M")) for s, e in bookings])
+    st.markdown("---")
+    st.subheader("예약 가능 시간표")
 
-    for start, end in sorted_bookings:
-        if current < start:
-            slot_start = current
-            slot_end = start
+    for day, reservations in sorted(schedule.items()):
+        # 1. 오늘 날짜 기준 주말이면 건너뜀
+        if day.weekday() >= 5:
+            continue
 
-            # 점심시간 제외 처리
-            if slot_end <= LUNCH_START or slot_start >= LUNCH_END:
-                free_slots.append((slot_start, slot_end))
-            elif slot_start < LUNCH_START and slot_end > LUNCH_END:
-                free_slots.append((slot_start, LUNCH_START))
-                free_slots.append((LUNCH_END, slot_end))
-            elif slot_start < LUNCH_START < slot_end <= LUNCH_END:
-                free_slots.append((slot_start, LUNCH_START))
-            elif LUNCH_START <= slot_start < LUNCH_END < slot_end:
-                free_slots.append((LUNCH_END, slot_end))
+        # 2. 시간대 기준 정리
+        if weekday_only:
+            base_slots = generate_slots(*WEEKDAY_TIME_RANGE)
+        else:
+            base_slots = generate_slots(*FULL_TIME_RANGE)
 
-        current = max(current, end)
+        # 점심시간 강제로 추가
+        reservations.append(LUNCH_TIME)
 
-    if current < end_time:
-        if current < LUNCH_START:
-            free_slots.append((current, min(end_time, LUNCH_START)))
-        elif current >= LUNCH_END:
-            free_slots.append((current, end_time))
+        # 3. 예약 겹치는 시간 제거
+        available_slots = []
+        for slot_start, slot_end in base_slots:
+            conflict = False
+            for r_start, r_end in reservations:
+                if not (slot_end <= r_start or slot_start >= r_end):
+                    conflict = True
+                    break
+            if not conflict:
+                available_slots.append((slot_start, slot_end))
 
-    return [(s.strftime("%H:%M"), e.strftime("%H:%M")) for s, e in free_slots if e > s]
-
-# 분석 실행
-if st.button("분석 시작"):
-    if not text_input.strip():
-        st.warning("텍스트를 입력해주세요.")
-    else:
-        parsed = parse_reservations(text_input)
-        result = []
-
-        # 모드에 따라 시간 범위 설정
-        start_scope = DAYTIME_START if mode_daytime_only else WORK_START
-        end_scope = DAYTIME_END if mode_daytime_only else WORK_END
-
-        for date, bookings in parsed.items():
-            if bookings:
-                free_times = find_free_slots(bookings, start_scope, end_scope)
-                for start, end in free_times:
-                    result.append({"날짜": date, "시작시간": start, "종료시간": end})
-
-        if result:
-            st.success("분석 완료! 아래 표를 확인하세요.")
-
+        # 4. 출력
+        if available_slots:
+            st.markdown(f"### {day.strftime('%m월 %d일 (%a)')}")
+            for s, e in available_slots:
+                st.write(f"{s.strftime('%H:%M')} ~ {e.strftime('%H:%M')}")
+        else:
+            st.markdown(f"### {day.strftime('%m월 %d일 (%a)')}: 예약 가능 시간 없음")
